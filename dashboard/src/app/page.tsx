@@ -68,12 +68,13 @@ export default async function OverviewPage() {
             <>
               {" "}
               &middot; Last updated{" "}
-              {new Date(lastChecked).toLocaleDateString("en-GB", {
+              {new Date(lastChecked + "Z").toLocaleString("en-GB", {
                 day: "numeric",
                 month: "short",
                 year: "numeric",
                 hour: "2-digit",
                 minute: "2-digit",
+                timeZone: "Europe/Belgrade",
               })}
             </>
           )}
