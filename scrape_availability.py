@@ -14,8 +14,6 @@ Environment variables:
 import sys
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-from openpyxl import load_workbook
 from datetime import datetime, timedelta
 import logging
 import time
@@ -28,6 +26,13 @@ PROPERTIES_SHEET = "Properties"
 AVAILABILITY_SHEET = "Availability"
 REQUEST_DELAY = 1  # seconds between requests to be polite to the server
 STORAGE_MODE = os.environ.get("STORAGE_MODE", "both")  # "both" or "db_only"
+
+# Lazy imports for Excel dependencies (not needed in db_only mode)
+pd = None
+load_workbook = None
+if STORAGE_MODE != "db_only":
+    import pandas as pd
+    from openpyxl import load_workbook
 
 # Setup logging
 logging.basicConfig(
