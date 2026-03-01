@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Rental Tracker",
-  description: "Occupancy analytics for rental properties",
+  title: "Rental Tracker | Occupancy Analytics",
+  description: "Occupancy analytics for weekendica.com rental properties",
 };
 
 export default function RootLayout({
