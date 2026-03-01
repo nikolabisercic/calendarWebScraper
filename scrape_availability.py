@@ -11,6 +11,7 @@ Environment variables:
     SUPABASE_KEY: Supabase secret key (for write access)
 """
 
+import sys
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -100,11 +101,12 @@ def get_properties() -> list[dict]:
     return properties
 
 
-def fetch_calendar_data(session: requests.Session, url: str) -> dict[str, bool]:
+def fetch_calendar_data(session: requests.Session, url: str, warnings: list) -> dict[str, bool]:
     """
     Fetch property page and parse calendar availability.
 
     Returns dict: {date_str: is_booked} e.g., {"2026-01-19": True, "2026-01-20": False}
+    Appends to `warnings` if unexpected CSS class combinations are found.
     """
     logger.info(f"Fetching: {url}")
 
@@ -118,8 +120,6 @@ def fetch_calendar_data(session: requests.Session, url: str) -> dict[str, bool]:
     soup = BeautifulSoup(response.text, "html.parser")
 
     # Find all calendar day elements
-    # Available: class contains "rz--available"
-    # Booked: class contains "rz--not-available" or "rz--day-unavailable"
     calendar_days = soup.find_all("li", attrs={"data-date": True})
 
     availability = {}
@@ -135,9 +135,21 @@ def fetch_calendar_data(session: requests.Session, url: str) -> dict[str, bool]:
         except ValueError:
             continue
 
-        # Check if booked (not available)
+        # Check booking status using positive class checks
         classes = day.get("class", [])
-        is_booked = "rz--available" not in classes
+        has_available = "rz--available" in classes
+        has_not_available = "rz--not-available" in classes
+
+        if has_available and has_not_available:
+            msg = f"Day {date_iso} has BOTH rz--available and rz--not-available ({url})"
+            warnings.append(msg)
+            is_booked = True
+        elif not has_available and not has_not_available:
+            msg = f"Day {date_iso} has NEITHER rz--available nor rz--not-available ({url})"
+            warnings.append(msg)
+            is_booked = True
+        else:
+            is_booked = has_not_available
 
         availability[date_iso] = is_booked
 
@@ -353,12 +365,13 @@ def main():
 
     success_count = 0
     availability_updates = []
+    structural_warnings = []
     for prop in properties:
         prop_id = prop["id"]
         url = prop["url"]
 
         # Fetch calendar data
-        calendar_data = fetch_calendar_data(session, url)
+        calendar_data = fetch_calendar_data(session, url, structural_warnings)
 
         # Always delay between requests, even on failure
         time.sleep(REQUEST_DELAY)
@@ -397,6 +410,15 @@ def main():
         calculate_occupancy_summaries()
 
     logger.info("Scraper finished")
+
+    if structural_warnings:
+        for w in structural_warnings:
+            logger.warning(w)
+        logger.error(
+            f"{len(structural_warnings)} structural warning(s) detected — "
+            "website markup may have changed, review the warnings above"
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
