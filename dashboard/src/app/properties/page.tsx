@@ -42,7 +42,7 @@ export default async function PropertiesPage() {
         </p>
       </div>
 
-      <div className="rounded-md border">
+      <div className="overflow-x-auto rounded-md border">
         <Table>
           <TableHeader>
             <TableRow>

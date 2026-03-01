@@ -24,6 +24,7 @@ export function TopPropertiesTable({
   }
 
   return (
+    <div className="overflow-x-auto">
     <Table>
       <TableHeader>
         <TableRow>
@@ -64,5 +65,6 @@ export function TopPropertiesTable({
         ))}
       </TableBody>
     </Table>
+    </div>
   );
 }

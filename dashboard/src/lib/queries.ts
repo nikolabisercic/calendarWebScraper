@@ -39,24 +39,42 @@ export async function getProperties(): Promise<Property[]> {
 }
 
 export async function getAvailability(): Promise<AvailabilityRow[]> {
-  const { data, error } = await supabase
-    .from("availability")
-    .select("property_id, date, booked, checked_at")
-    .order("date");
-  if (error) throw error;
-  return data;
+  const PAGE_SIZE = 1000;
+  let allData: AvailabilityRow[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("availability")
+      .select("property_id, date, booked, checked_at")
+      .order("date")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    allData = allData.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return allData;
 }
 
 export async function getPropertyAvailability(
   propertyId: number
 ): Promise<AvailabilityRow[]> {
-  const { data, error } = await supabase
-    .from("availability")
-    .select("property_id, date, booked, checked_at")
-    .eq("property_id", propertyId)
-    .order("date");
-  if (error) throw error;
-  return data;
+  const PAGE_SIZE = 1000;
+  let allData: AvailabilityRow[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("availability")
+      .select("property_id, date, booked, checked_at")
+      .eq("property_id", propertyId)
+      .order("date")
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    allData = allData.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return allData;
 }
 
 function isWeekend(dateStr: string): boolean {

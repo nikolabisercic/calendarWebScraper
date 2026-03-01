@@ -232,6 +232,8 @@ def batch_upsert_supabase(db, updates: list[tuple[int, str, bool]]):
         records, on_conflict="property_id,date"
     ).execute()
     logger.info(f"Supabase upsert: {len(result.data)} rows")
+    if len(result.data) != len(records):
+        logger.warning(f"Supabase upsert mismatch: sent {len(records)}, got {len(result.data)} — possible RLS issue")
 
 
 def calculate_occupancy_summaries():
@@ -383,7 +385,10 @@ def main():
 
         # Write to Supabase
         if use_db and db:
-            batch_upsert_supabase(db, availability_updates)
+            try:
+                batch_upsert_supabase(db, availability_updates)
+            except Exception as e:
+                logger.error(f"Supabase write failed: {e}")
 
     # Calculate and update occupancy summaries (Excel only)
     if use_excel:
