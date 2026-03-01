@@ -5,6 +5,7 @@ import {
   getPropertyAvailability,
   computePropertyMonthlyOccupancy,
   extractPropertyName,
+  isWeekend,
 } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,11 +35,7 @@ export default async function PropertyDetailPage({
   const bookedDays = availability.filter((r) => r.booked).length;
   const occupancy = totalDays > 0 ? bookedDays / totalDays : 0;
 
-  const weekendRows = availability.filter((r) => {
-    const d = new Date(r.date + "T00:00:00");
-    const day = d.getDay();
-    return day === 0 || day === 5 || day === 6;
-  });
+  const weekendRows = availability.filter((r) => isWeekend(r.date));
   const weekendOcc =
     weekendRows.length > 0
       ? weekendRows.filter((r) => r.booked).length / weekendRows.length

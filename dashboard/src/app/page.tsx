@@ -3,6 +3,7 @@ import {
   getAvailability,
   computePropertiesWithOccupancy,
   computeMonthlyOccupancy,
+  isWeekend,
 } from "@/lib/queries";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OccupancyChart } from "@/components/occupancy-chart";
@@ -27,21 +28,13 @@ export default async function OverviewPage() {
   const totalBooked = availability.filter((r) => r.booked).length;
   const overallOccupancy = totalDays > 0 ? totalBooked / totalDays : 0;
 
-  const weekendRows = availability.filter((r) => {
-    const d = new Date(r.date + "T00:00:00");
-    const day = d.getDay();
-    return day === 0 || day === 5 || day === 6;
-  });
+  const weekendRows = availability.filter((r) => isWeekend(r.date));
   const weekendOcc =
     weekendRows.length > 0
       ? weekendRows.filter((r) => r.booked).length / weekendRows.length
       : 0;
 
-  const weekdayRows = availability.filter((r) => {
-    const d = new Date(r.date + "T00:00:00");
-    const day = d.getDay();
-    return day !== 0 && day !== 5 && day !== 6;
-  });
+  const weekdayRows = availability.filter((r) => !isWeekend(r.date));
   const weekdayOcc =
     weekdayRows.length > 0
       ? weekdayRows.filter((r) => r.booked).length / weekdayRows.length

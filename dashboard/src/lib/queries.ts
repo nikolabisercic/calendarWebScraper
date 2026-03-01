@@ -42,7 +42,7 @@ export async function getAvailability(): Promise<AvailabilityRow[]> {
   const PAGE_SIZE = 1000;
   // Limit to last 12 months to bound query growth
   const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - 12);
+  cutoff.setFullYear(cutoff.getFullYear() - 1);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
 
   let allData: AvailabilityRow[] = [];
@@ -53,6 +53,7 @@ export async function getAvailability(): Promise<AvailabilityRow[]> {
       .select("property_id, date, booked, checked_at")
       .gte("date", cutoffStr)
       .order("date")
+      .order("property_id")
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw error;
     allData = allData.concat(data);
@@ -70,7 +71,10 @@ export async function getPropertyById(
     .select("id, url, lokacija, kapacitet_kuce")
     .eq("id", propertyId)
     .single();
-  if (error) return null;
+  if (error) {
+    if (error.code === "PGRST116") return null; // not found
+    throw error;
+  }
   return data;
 }
 
@@ -78,6 +82,10 @@ export async function getPropertyAvailability(
   propertyId: number
 ): Promise<AvailabilityRow[]> {
   const PAGE_SIZE = 1000;
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - 1);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
   let allData: AvailabilityRow[] = [];
   let from = 0;
   while (true) {
@@ -85,7 +93,9 @@ export async function getPropertyAvailability(
       .from("availability")
       .select("property_id, date, booked, checked_at")
       .eq("property_id", propertyId)
+      .gte("date", cutoffStr)
       .order("date")
+      .order("property_id")
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw error;
     allData = allData.concat(data);
@@ -95,7 +105,7 @@ export async function getPropertyAvailability(
   return allData;
 }
 
-function isWeekend(dateStr: string): boolean {
+export function isWeekend(dateStr: string): boolean {
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDay();
   return day === 0 || day === 5 || day === 6; // Fri, Sat, Sun

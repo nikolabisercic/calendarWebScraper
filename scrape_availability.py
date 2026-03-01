@@ -148,11 +148,11 @@ def fetch_calendar_data(session: requests.Session, url: str, warnings: list) -> 
         if has_available and has_not_available:
             msg = f"Day {date_iso} has BOTH rz--available and rz--not-available ({url})"
             warnings.append(msg)
-            is_booked = True
+            continue  # skip — don't persist suspect data
         elif not has_available and not has_not_available:
             msg = f"Day {date_iso} has NEITHER rz--available nor rz--not-available ({url})"
             warnings.append(msg)
-            is_booked = True
+            continue  # skip — don't persist suspect data
         else:
             is_booked = has_not_available
 
@@ -250,7 +250,9 @@ def batch_upsert_supabase(db, updates: list[tuple[int, str, bool]]):
     ).execute()
     logger.info(f"Supabase upsert: {len(result.data)} rows")
     if len(result.data) != len(records):
-        logger.warning(f"Supabase upsert mismatch: sent {len(records)}, got {len(result.data)} — possible RLS issue")
+        raise RuntimeError(
+            f"Supabase upsert mismatch: sent {len(records)}, got {len(result.data)} — possible RLS issue"
+        )
 
 
 def calculate_occupancy_summaries():
@@ -347,7 +349,7 @@ def main():
     db = init_supabase() if use_db else None
     if use_db and not db:
         logger.error("Database storage requested but Supabase credentials not set")
-        return
+        sys.exit(1)
 
     # Ensure Excel structure is correct (skip in db_only mode)
     if use_excel:
@@ -395,6 +397,10 @@ def main():
         success_count += 1
 
     logger.info(f"Successfully scraped {success_count}/{len(properties)} properties")
+
+    if success_count == 0 and len(properties) > 0:
+        logger.error("All properties failed to scrape — site may be down or blocking requests")
+        sys.exit(1)
 
     if availability_updates:
         # Write to Excel
