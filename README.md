@@ -55,23 +55,30 @@ The availability calendar on each property page uses `<li>` elements with specif
 ### Daily Scrape Flow
 
 1. Read property URLs from Excel (Properties sheet)
-2. For each property:
-   - Fetch the page HTML
+2. Create a `requests.Session` (reuses TCP connections across all 23 requests to the same host)
+3. For each property:
+   - Fetch the page HTML via the shared session
    - Parse all `<li data-date="...">` calendar elements
-   - Extract TODAY's and TOMORROW's availability status
-3. Update/insert records in the Availability sheet
-4. Recalculate occupancy summaries in Properties sheet
+   - Collect TODAY's and TOMORROW's availability status into a list
+4. Batch write all collected records to the Availability sheet (single file open/save)
+5. Recalculate occupancy summaries in Properties sheet
 
 ### Why Today + Tomorrow?
 
 - **Today**: Captures definitive occupancy for the current day
 - **Tomorrow**: Provides backup data if you miss running the script one day
 
-### Update Logic
+### Batch Update Logic
 
-- If (property_id, date) exists → UPDATE the record
+All availability updates are collected in memory during the scraping loop, then written to Excel in a single batch operation. This avoids opening/saving the workbook once per record (which would be 46 cycles for 23 properties × 2 dates).
+
+The batch function builds a `dict` index of existing `(property_id, date) → row_number` in one pass over the sheet, enabling O(1) lookups for deduplication:
+
+- If `(property_id, date)` exists → UPDATE the record in place
 - If not → INSERT new record
-- This prevents duplicate rows and keeps data clean
+- Newly inserted rows are added to the index, preventing duplicates within the same batch
+
+This means running the scraper twice on the same day produces `46 updated, 0 inserted` — no duplicate rows.
 
 ## Excel Output Format
 
@@ -127,10 +134,11 @@ python3 -m venv /path/to/envs/calendarScraper
 ```
 INFO - Starting occupancy scraper
 INFO - Found 23 properties
-INFO - Target dates: ['2026-01-19', '2026-01-20']
+INFO - Target dates: ['2026-03-01', '2026-03-02']
 INFO - Fetching: https://www.weekendica.com/vikendica/...
 ...
 INFO - Successfully scraped 23/23 properties
+INFO - Availability batch update: 46 updated, 0 inserted
 INFO - Occupancy summaries updated
 INFO - Scraper finished
 ```
@@ -163,15 +171,37 @@ props[['Lokacija', 'Occ_Weekend', 'Occ_Weekday']]
 
 ```
 calendarWebScraper/
-├── scrape_availability.py   # Main scraper script
-├── requirements.txt         # Python dependencies
-├── KuceZaIzdavanje.xlsx     # Data file (Properties + Availability sheets)
-├── analyze_data.ipynb       # Jupyter notebook for analysis
-└── README.md                # This file
+├── scrape_availability.py        # Main scraper script
+├── requirements.txt              # Python dependencies
+├── KuceZaIzdavanje.xlsx          # Data file (Properties + Availability sheets)
+├── analyze_data.ipynb            # Jupyter notebook for analysis
+├── validate_scraping.py          # Validation: checks 5 properties for correct parsing
+├── validate_all_properties.py    # Validation: scans all 23 properties for bookings
+└── README.md                     # This file
 ```
+
+## Architecture Notes
+
+### HTTP Session Reuse
+
+All 23 requests go to the same host (`weekendica.com`). The scraper uses a single `requests.Session` so TCP connections are reused across requests rather than opening a new connection each time.
+
+### Occupancy Summary Calculation
+
+The `calculate_occupancy_summaries()` function computes several metrics with pandas (weekend/weekday/total/monthly occupancy, rankings) and writes them back to the Properties sheet using a `write_column()` helper. Each metric is a single call:
+
+```python
+write_column("Occ_Weekend", weekend_occ)
+write_column("Occ_Weekday", weekday_occ)
+write_column("Occ_Total", total_occ)
+write_column("Rank", rankings, formatter=lambda v: int(v), fallback="-")
+```
+
+Monthly columns are generated dynamically and stack as new months are scraped.
 
 ## Notes
 
 - The scraper includes a 1-second delay between requests to be polite to the server
 - Properties with failed requests are skipped (logged as warnings)
 - Monthly occupancy columns are added automatically as new months are scraped
+- The calendar data is present in the static HTML (no JavaScript rendering needed) — `requests.get()` is sufficient, no headless browser required

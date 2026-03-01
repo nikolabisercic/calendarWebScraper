@@ -93,7 +93,7 @@ def get_properties() -> list[dict]:
     return properties
 
 
-def fetch_calendar_data(url: str) -> dict[str, bool]:
+def fetch_calendar_data(session: requests.Session, url: str) -> dict[str, bool]:
     """
     Fetch property page and parse calendar availability.
 
@@ -101,12 +101,8 @@ def fetch_calendar_data(url: str) -> dict[str, bool]:
     """
     logger.info(f"Fetching: {url}")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = session.get(url, timeout=30)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Failed to fetch {url}: {e}")
@@ -151,44 +147,54 @@ def get_target_dates() -> list[str]:
     ]
 
 
-def update_availability(property_id: int, date: str, booked: bool):
-    """Update or insert availability record in Excel."""
+def batch_update_availability(updates: list[tuple[int, str, bool]]):
+    """Batch update or insert availability records in Excel.
+
+    Opens the workbook once, builds an index for O(1) lookups, and saves once.
+
+    Args:
+        updates: List of (property_id, date_str, booked) tuples.
+    """
     wb = load_workbook(EXCEL_FILE)
     sheet = wb[AVAILABILITY_SHEET]
-
-    # Convert date to day_of_week and month_of_year
-    date_obj = datetime.strptime(date, "%Y-%m-%d")
-    day_of_week = date_obj.strftime("%A")
-    month_of_year = date_obj.strftime("%B")
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Search for existing row with same property_id and date
-    existing_row = None
+    # Build index: (property_id, date_str) -> row_number (single pass)
+    existing_rows = {}
     for row_num in range(2, sheet.max_row + 1):
-        if (sheet.cell(row=row_num, column=1).value == property_id and
-            str(sheet.cell(row=row_num, column=2).value) == date):
-            existing_row = row_num
-            break
+        key = (sheet.cell(row=row_num, column=1).value,
+               str(sheet.cell(row=row_num, column=2).value)[:10])
+        existing_rows[key] = row_num
 
-    if existing_row:
-        # Update existing row
-        sheet.cell(row=existing_row, column=3, value=1 if booked else 0)
-        sheet.cell(row=existing_row, column=4, value=checked_at)
-        sheet.cell(row=existing_row, column=5, value=day_of_week)
-        sheet.cell(row=existing_row, column=6, value=month_of_year)
-        logger.debug(f"Updated: property {property_id}, date {date}, booked={booked}")
-    else:
-        # Insert new row
-        new_row = sheet.max_row + 1
-        sheet.cell(row=new_row, column=1, value=property_id)
-        sheet.cell(row=new_row, column=2, value=date)
-        sheet.cell(row=new_row, column=3, value=1 if booked else 0)
-        sheet.cell(row=new_row, column=4, value=checked_at)
-        sheet.cell(row=new_row, column=5, value=day_of_week)
-        sheet.cell(row=new_row, column=6, value=month_of_year)
-        logger.debug(f"Inserted: property {property_id}, date {date}, booked={booked}")
+    updated = 0
+    inserted = 0
+    for property_id, date, booked in updates:
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
+        day_of_week = date_obj.strftime("%A")
+        month_of_year = date_obj.strftime("%B")
+
+        key = (property_id, date)
+        row = existing_rows.get(key)
+
+        if row:
+            sheet.cell(row=row, column=3, value=1 if booked else 0)
+            sheet.cell(row=row, column=4, value=checked_at)
+            sheet.cell(row=row, column=5, value=day_of_week)
+            sheet.cell(row=row, column=6, value=month_of_year)
+            updated += 1
+        else:
+            new_row = sheet.max_row + 1
+            sheet.cell(row=new_row, column=1, value=property_id)
+            sheet.cell(row=new_row, column=2, value=date)
+            sheet.cell(row=new_row, column=3, value=1 if booked else 0)
+            sheet.cell(row=new_row, column=4, value=checked_at)
+            sheet.cell(row=new_row, column=5, value=day_of_week)
+            sheet.cell(row=new_row, column=6, value=month_of_year)
+            existing_rows[key] = new_row
+            inserted += 1
 
     wb.save(EXCEL_FILE)
+    logger.info(f"Availability batch update: {updated} updated, {inserted} inserted")
 
 
 def calculate_occupancy_summaries():
@@ -198,7 +204,7 @@ def calculate_occupancy_summaries():
     # Read availability data
     try:
         avail_df = pd.read_excel(EXCEL_FILE, sheet_name=AVAILABILITY_SHEET)
-    except Exception:
+    except (ValueError, KeyError):
         logger.warning("No availability data yet, skipping summary calculation")
         return
 
@@ -241,76 +247,32 @@ def calculate_occupancy_summaries():
     def get_or_create_col(col_name):
         if col_name in existing_headers:
             return existing_headers.index(col_name) + 1
-        else:
-            col_idx = props_sheet.max_column + 1
-            props_sheet.cell(row=header_row, column=col_idx, value=col_name)
-            existing_headers.append(col_name)
-            return col_idx
+        col_idx = props_sheet.max_column + 1
+        props_sheet.cell(row=header_row, column=col_idx, value=col_name)
+        existing_headers.append(col_name)
+        return col_idx
 
-    # Add weekend occupancy column (summary columns first, before monthly)
-    weekend_col_idx = get_or_create_col("Occ_Weekend")
-    for row_num in range(2, props_sheet.max_row + 1):
-        prop_id = props_sheet.cell(row=row_num, column=1).value
-        if prop_id is None:
-            continue
-        try:
-            occ_rate = weekend_occ.get(prop_id, 0) if prop_id in weekend_occ.index else 0
-            props_sheet.cell(row=row_num, column=weekend_col_idx, value=f"{occ_rate:.0%}")
-        except (KeyError, TypeError):
-            props_sheet.cell(row=row_num, column=weekend_col_idx, value="0%")
-
-    # Add weekday occupancy column
-    weekday_col_idx = get_or_create_col("Occ_Weekday")
-    for row_num in range(2, props_sheet.max_row + 1):
-        prop_id = props_sheet.cell(row=row_num, column=1).value
-        if prop_id is None:
-            continue
-        try:
-            occ_rate = weekday_occ.get(prop_id, 0) if prop_id in weekday_occ.index else 0
-            props_sheet.cell(row=row_num, column=weekday_col_idx, value=f"{occ_rate:.0%}")
-        except (KeyError, TypeError):
-            props_sheet.cell(row=row_num, column=weekday_col_idx, value="0%")
-
-    # Add total occupancy column
-    total_col_idx = get_or_create_col("Occ_Total")
-    for row_num in range(2, props_sheet.max_row + 1):
-        prop_id = props_sheet.cell(row=row_num, column=1).value
-        if prop_id is None:
-            continue
-        try:
-            occ_rate = total_occ.get(prop_id, 0)
-            props_sheet.cell(row=row_num, column=total_col_idx, value=f"{occ_rate:.0%}")
-        except (KeyError, TypeError):
-            props_sheet.cell(row=row_num, column=total_col_idx, value="0%")
-
-    # Add ranking column
-    rank_col_idx = get_or_create_col("Rank")
-    for row_num in range(2, props_sheet.max_row + 1):
-        prop_id = props_sheet.cell(row=row_num, column=1).value
-        if prop_id is None:
-            continue
-        try:
-            rank = rankings.get(prop_id, 0) if prop_id in rankings.index else 0
-            props_sheet.cell(row=row_num, column=rank_col_idx, value=int(rank) if rank > 0 else "-")
-        except (KeyError, TypeError):
-            props_sheet.cell(row=row_num, column=rank_col_idx, value="-")
-
-    # Add monthly occupancy columns (at the end, so they stack as new months are added)
-    unique_months = sorted(avail_df["year_month"].unique())
-    for month in unique_months:
-        month_str = str(month)  # e.g., "2026-01"
-        col_name = f"Occ_{month_str}"
+    # Helper to write a data series into a named column
+    def write_column(col_name, data_series, formatter=lambda v: f"{v:.0%}", fallback="0%"):
         col_idx = get_or_create_col(col_name)
-
         for row_num in range(2, props_sheet.max_row + 1):
             prop_id = props_sheet.cell(row=row_num, column=1).value
             if prop_id is None:
                 continue
-            try:
-                occ_rate = monthly_occ.get((prop_id, month), 0)
-                props_sheet.cell(row=row_num, column=col_idx, value=f"{occ_rate:.0%}")
-            except (KeyError, TypeError):
-                props_sheet.cell(row=row_num, column=col_idx, value="0%")
+            value = data_series.get(prop_id, None)
+            props_sheet.cell(row=row_num, column=col_idx,
+                             value=formatter(value) if value is not None else fallback)
+
+    # Summary columns
+    write_column("Occ_Weekend", weekend_occ)
+    write_column("Occ_Weekday", weekday_occ)
+    write_column("Occ_Total", total_occ)
+    write_column("Rank", rankings, formatter=lambda v: int(v), fallback="-")
+
+    # Monthly occupancy columns (stack as new months are added)
+    for month in sorted(avail_df["year_month"].unique()):
+        month_data = monthly_occ.xs(month, level="year_month", drop_level=True)
+        write_column(f"Occ_{month}", month_data)
 
     wb.save(EXCEL_FILE)
     logger.info("Occupancy summaries updated")
@@ -334,32 +296,39 @@ def main():
     logger.info(f"Target dates: {target_dates}")
 
     # Scrape each property
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
     success_count = 0
+    availability_updates = []
     for prop in properties:
         prop_id = prop["id"]
         url = prop["url"]
 
         # Fetch calendar data
-        calendar_data = fetch_calendar_data(url)
+        calendar_data = fetch_calendar_data(session, url)
+
+        # Always delay between requests, even on failure
+        time.sleep(REQUEST_DELAY)
 
         if not calendar_data:
             logger.warning(f"No calendar data for property {prop_id}")
             continue
 
-        # Update availability for target dates
+        # Collect availability for target dates
         for date in target_dates:
             if date in calendar_data:
-                booked = calendar_data[date]
-                update_availability(prop_id, date, booked)
+                availability_updates.append((prop_id, date, calendar_data[date]))
             else:
                 logger.warning(f"Date {date} not found in calendar for property {prop_id}")
 
         success_count += 1
 
-        # Be polite to the server
-        time.sleep(REQUEST_DELAY)
-
     logger.info(f"Successfully scraped {success_count}/{len(properties)} properties")
+
+    # Batch write all availability data to Excel (single open/save)
+    if availability_updates:
+        batch_update_availability(availability_updates)
 
     # Calculate and update occupancy summaries
     calculate_occupancy_summaries()
