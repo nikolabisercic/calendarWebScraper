@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Rental Tracker Dashboard
 
-## Getting Started
+Next.js analytics dashboard for the rental property occupancy tracker. Reads data from Supabase and displays occupancy metrics, trends, and per-property details.
 
-First, run the development server:
+## Tech Stack
+
+- **Next.js 16** (App Router, Server Components)
+- **shadcn/ui** — Cards, tables, badges, tabs
+- **shadcn/charts** (Recharts) — Bar charts for occupancy trends
+- **next-themes** — Light/dark theme with system detection
+- **Tailwind CSS v4**
+- **Supabase JS** — Server-side data fetching from PostgreSQL
+
+## Pages
+
+| Route              | Description                                         |
+| ------------------ | --------------------------------------------------- |
+| `/`                | Overview — KPI cards, monthly trend chart, top 5    |
+| `/properties`      | All 23 properties ranked by occupancy               |
+| `/properties/[id]` | Property detail — monthly chart + calendar heatmap  |
+
+## Development
+
+### Prerequisites
+
+- Node.js 18+
+- Supabase project with `properties` and `availability` tables
+
+### Setup
+
+```bash
+cd dashboard
+npm install
+```
+
+Create `.env.local`:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-publishable-key
+```
+
+### Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm run start
+```
 
-## Learn More
+## Deployment
 
-To learn more about Next.js, take a look at the following resources:
+Deployed on Vercel with auto-deploy on push to `master`. The Vercel project root directory is set to `dashboard/`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Environment variables on Vercel:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` (publishable key — read-only access)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Data Flow
 
-## Deploy on Vercel
+Server components fetch from Supabase at request time with a 1-hour revalidation cache (`revalidate = 3600`). Occupancy metrics (weekend/weekday/total, monthly breakdowns) are computed in `src/lib/queries.ts` from raw availability records.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Project Structure
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+dashboard/
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx              # Root layout with nav + theme provider
+│   │   ├── page.tsx                # Overview page
+│   │   ├── globals.css             # Tailwind + shadcn theme variables
+│   │   └── properties/
+│   │       ├── page.tsx            # Properties table
+│   │       └── [id]/page.tsx       # Property detail
+│   ├── components/
+│   │   ├── ui/                     # shadcn/ui components
+│   │   ├── occupancy-chart.tsx     # Monthly bar chart (Recharts)
+│   │   ├── calendar-heatmap.tsx    # Daily availability grid
+│   │   ├── top-properties-table.tsx
+│   │   ├── theme-provider.tsx      # next-themes wrapper
+│   │   └── theme-toggle.tsx        # Light/dark toggle button
+│   └── lib/
+│       ├── supabase.ts             # Supabase client init
+│       ├── queries.ts              # Data fetching + computation
+│       └── utils.ts                # shadcn cn() utility
+├── package.json
+└── .env.local                      # Local Supabase credentials (gitignored)
+```

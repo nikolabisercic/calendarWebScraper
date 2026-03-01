@@ -1,207 +1,154 @@
 # Rental Property Occupancy Tracker
 
-A Python scraper that tracks daily occupancy of rental properties from weekendica.com to help evaluate investment potential.
+Tracks daily occupancy of 23 rental properties from weekendica.com to evaluate investment potential. Runs automatically via GitHub Actions and displays analytics on a live dashboard.
 
-## Overview
+## Architecture
 
-This tool scrapes availability calendars from 23 rental properties and stores the data in an Excel file. Running it daily builds a historical dataset for occupancy analysis.
+```
+┌─────────────────┐       ┌──────────────┐       ┌──────────────────┐
+│  GitHub Actions  │──────▶│   Supabase   │◀──────│  Vercel (Next.js)│
+│  (twice daily)   │ write │  PostgreSQL  │  read │  Dashboard       │
+│  scraper script  │       │  (free tier) │       │  shadcn/ui       │
+└─────────────────┘       └──────────────┘       └──────────────────┘
+```
 
-## HTML Structure (weekendica.com)
+- **Scraper**: Python script runs at 8 AM + 8 PM CET via GitHub Actions cron
+- **Database**: Supabase PostgreSQL stores properties and daily availability records
+- **Dashboard**: Next.js app on Vercel with shadcn/ui — auto-deploys on push
 
-The availability calendar on each property page uses `<li>` elements with specific CSS classes:
+## How It Works
+
+### Scraping
+
+1. Read property URLs from Supabase (or Excel locally)
+2. Fetch each property page via `requests.Session` (TCP reuse across 23 requests)
+3. Parse `<li data-date="...">` calendar elements — if `rz--available` is in the class list it's available, otherwise it's booked
+4. Collect today's and tomorrow's availability into a batch
+5. Upsert to Supabase (and optionally Excel)
+
+### Storage Modes
+
+Controlled by `STORAGE_MODE` environment variable:
+
+| Mode      | Excel | Supabase | Use case                        |
+| --------- | ----- | -------- | ------------------------------- |
+| `both`    | Yes   | Yes      | Local development (default)     |
+| `db_only` | No    | Yes      | GitHub Actions CI               |
+
+### Detection Logic
 
 ```html
-<!-- Available date -->
-<li
-  class="rz--future-day rz--available"
-  data-timestamp="1777420800"
-  data-date="29-04-2026"
->
-  <span
-    ><i>29</i>
-    <div class="cal-price">
-      <span class="rz--amount">170.00</span>
-      <span class="rz--currency">€</span>
-    </div>
-  </span>
-</li>
+<!-- Available: class contains "rz--available" -->
+<li class="rz--future-day rz--available" data-date="29-04-2026">
 
-<!-- Booked/Unavailable date -->
-<li
-  class="rz--future-day rz--day-unavailable rz--not-available rz--unavailable-start"
-  data-timestamp="1777507200"
-  data-date="30-04-2026"
->
-  <span
-    ><i>30</i>
-    <div class="cal-price">
-      <span class="rz--amount">170.00</span>
-      <span class="rz--currency">€</span>
-    </div>
-  </span>
-</li>
+<!-- Booked: class does NOT contain "rz--available" -->
+<li class="rz--future-day rz--day-unavailable rz--not-available" data-date="30-04-2026">
 ```
 
-**Key attributes:**
+Calendar data is in static HTML — no headless browser needed.
 
-- `data-date`: Date in DD-MM-YYYY format
-- `rz--available`: Present when date is available for booking
-- `rz--not-available` / `rz--day-unavailable`: Present when date is booked
+## Dashboard
 
-**Detection logic:** If `rz--available` is in the class list → available (booked=0), otherwise → booked (booked=1)
+Live at the Vercel deployment URL. Three views:
 
-## Scraping Approach
+- **Overview** — KPI cards (total/weekend/weekday occupancy), monthly trend chart, top 5 properties
+- **Properties** — Sortable table of all 23 properties ranked by occupancy
+- **Property Detail** — Per-property monthly bar chart and daily calendar heatmap
 
-### Daily Scrape Flow
+Supports light and dark themes.
 
-1. Read property URLs from Excel (Properties sheet)
-2. Create a `requests.Session` (reuses TCP connections across all 23 requests to the same host)
-3. For each property:
-   - Fetch the page HTML via the shared session
-   - Parse all `<li data-date="...">` calendar elements
-   - Collect TODAY's and TOMORROW's availability status into a list
-4. Batch write all collected records to the Availability sheet (single file open/save)
-5. Recalculate occupancy summaries in Properties sheet
+See [`dashboard/README.md`](dashboard/README.md) for development setup.
 
-### Why Today + Tomorrow?
+## Local Development
 
-- **Today**: Captures definitive occupancy for the current day
-- **Tomorrow**: Provides backup data if you miss running the script one day
-
-### Batch Update Logic
-
-All availability updates are collected in memory during the scraping loop, then written to Excel in a single batch operation. This avoids opening/saving the workbook once per record (which would be 46 cycles for 23 properties × 2 dates).
-
-The batch function builds a `dict` index of existing `(property_id, date) → row_number` in one pass over the sheet, enabling O(1) lookups for deduplication:
-
-- If `(property_id, date)` exists → UPDATE the record in place
-- If not → INSERT new record
-- Newly inserted rows are added to the index, preventing duplicates within the same batch
-
-This means running the scraper twice on the same day produces `46 updated, 0 inserted` — no duplicate rows.
-
-## Excel Output Format
-
-### Sheet 1: Properties (static info + analytics)
-
-| Column          | Description                                                |
-| --------------- | ---------------------------------------------------------- |
-| A: ID           | Property identifier (1-23)                                 |
-| B: Vikendice    | Property URL                                               |
-| C: Lokacija     | Location                                                   |
-| D-J             | Property attributes (pool size, capacity, amenities, etc.) |
-| K: Occ_Weekend  | Occupancy % for Fri/Sat/Sun                                |
-| L: Occ_Weekday  | Occupancy % for Mon-Thu                                    |
-| M: Occ_Total    | Overall occupancy %                                        |
-| N: Rank         | Ranking by total occupancy (1 = highest)                   |
-| O+: Occ_YYYY-MM | Monthly occupancy columns (stack as months pass)           |
-
-### Sheet 2: Availability (raw daily data)
-
-| Column        | Description                           |
-| ------------- | ------------------------------------- |
-| property_id   | Maps to ID in Properties sheet (1-23) |
-| date          | YYYY-MM-DD format                     |
-| booked        | 1 = booked, 0 = available             |
-| checked_at    | Timestamp when data was scraped       |
-| day_of_week   | Monday, Tuesday, etc.                 |
-| month_of_year | January, February, etc.               |
-
-## Setup
-
-### Create virtual environment
+### Setup
 
 ```bash
-python3 -m venv /path/to/envs/calendarScraper
+python3 -m venv ~/envs/calendarScraper
+source ~/envs/calendarScraper/bin/activate
+pip install -r requirements.txt
 ```
 
-### Install dependencies
+### Environment Variables
+
+Create a `.env` file:
+
+```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-secret-key
+STORAGE_MODE=both
+```
+
+### Run Scraper
 
 ```bash
-/path/to/envs/calendarScraper/bin/pip install -r requirements.txt
+python scrape_availability.py
 ```
 
-## Usage
-
-### Run the scraper
-
-```bash
-/path/to/envs/calendarScraper/bin/python scrape_availability.py
-```
-
-### Expected output
+### Expected Output
 
 ```
-INFO - Starting occupancy scraper
+INFO - Starting occupancy scraper (storage: both)
 INFO - Found 23 properties
 INFO - Target dates: ['2026-03-01', '2026-03-02']
 INFO - Fetching: https://www.weekendica.com/vikendica/...
 ...
 INFO - Successfully scraped 23/23 properties
 INFO - Availability batch update: 46 updated, 0 inserted
-INFO - Occupancy summaries updated
+INFO - Supabase upsert: 46 rows
 INFO - Scraper finished
 ```
 
-## Data Analysis
+## Database Schema
 
-Use the included Jupyter notebook for analysis:
+### `properties`
 
-```bash
-jupyter notebook analyze_data.ipynb
-```
+| Column            | Type    | Description                          |
+| ----------------- | ------- | ------------------------------------ |
+| id                | integer | Primary key (1-23)                   |
+| url               | text    | weekendica.com property URL          |
+| lokacija          | text    | Location                             |
+| kapacitet_kuce    | text    | House capacity                       |
+| + amenity columns | boolean | Pool size, jacuzzi, summer kitchen…  |
 
-Or with pandas:
+### `availability`
 
-```python
-import pandas as pd
+| Column      | Type      | Description                       |
+| ----------- | --------- | --------------------------------- |
+| id          | serial    | Auto-increment PK                 |
+| property_id | integer   | FK to properties                  |
+| date        | date      | The date checked                  |
+| booked      | boolean   | true = booked, false = available  |
+| checked_at  | timestamp | When the scraper ran              |
 
-# Load data
-props = pd.read_excel('KuceZaIzdavanje.xlsx', sheet_name='Properties')
-avail = pd.read_excel('KuceZaIzdavanje.xlsx', sheet_name='Availability')
-
-# Occupancy by location
-props.groupby('Lokacija')['Occ_Total'].mean()
-
-# Weekend vs weekday comparison
-props[['Lokacija', 'Occ_Weekend', 'Occ_Weekday']]
-```
+Unique constraint on `(property_id, date)` — upserts on conflict.
 
 ## File Structure
 
 ```
 calendarWebScraper/
-├── scrape_availability.py        # Main scraper script
-├── requirements.txt              # Python dependencies
-├── KuceZaIzdavanje.xlsx          # Data file (Properties + Availability sheets)
-├── analyze_data.ipynb            # Jupyter notebook for analysis
-├── validate_scraping.py          # Validation: checks 5 properties for correct parsing
-├── validate_all_properties.py    # Validation: scans all 23 properties for bookings
-└── README.md                     # This file
+├── scrape_availability.py          # Main scraper (dual storage: Excel + Supabase)
+├── requirements.txt                # Python dependencies
+├── seed_database.py                # One-time migration: Excel → Supabase
+├── KuceZaIzdavanje.xlsx            # Local Excel data file
+├── analyze_data.ipynb              # Jupyter notebook for analysis
+├── validate_scraping.py            # Validation: checks 5 properties
+├── validate_all_properties.py      # Validation: scans all 23 properties
+├── .github/workflows/scrape.yml    # GitHub Actions cron (twice daily)
+├── supabase/
+│   ├── config.toml                 # Supabase CLI config
+│   └── migrations/                 # SQL migrations
+├── dashboard/                      # Next.js analytics dashboard
+│   ├── src/app/                    # App Router pages
+│   ├── src/components/             # UI components (shadcn/ui + charts)
+│   └── src/lib/                    # Supabase client + data queries
+└── README.md
 ```
 
-## Architecture Notes
+## GitHub Actions
 
-### HTTP Session Reuse
+The workflow at `.github/workflows/scrape.yml` runs twice daily:
 
-All 23 requests go to the same host (`weekendica.com`). The scraper uses a single `requests.Session` so TCP connections are reused across requests rather than opening a new connection each time.
-
-### Occupancy Summary Calculation
-
-The `calculate_occupancy_summaries()` function computes several metrics with pandas (weekend/weekday/total/monthly occupancy, rankings) and writes them back to the Properties sheet using a `write_column()` helper. Each metric is a single call:
-
-```python
-write_column("Occ_Weekend", weekend_occ)
-write_column("Occ_Weekday", weekday_occ)
-write_column("Occ_Total", total_occ)
-write_column("Rank", rankings, formatter=lambda v: int(v), fallback="-")
-```
-
-Monthly columns are generated dynamically and stack as new months are scraped.
-
-## Notes
-
-- The scraper includes a 1-second delay between requests to be polite to the server
-- Properties with failed requests are skipped (logged as warnings)
-- Monthly occupancy columns are added automatically as new months are scraped
-- The calendar data is present in the static HTML (no JavaScript rendering needed) — `requests.get()` is sufficient, no headless browser required
+- **Schedule**: `0 7,19 * * *` (7 AM + 7 PM UTC = 8 AM + 8 PM CET)
+- **Manual trigger**: Available via `workflow_dispatch` in the Actions tab
+- **Secrets required**: `SUPABASE_URL`, `SUPABASE_KEY`
