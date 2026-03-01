@@ -1,0 +1,26 @@
+name: Daily Scraper
+
+on:
+  schedule:
+    - cron: '0 7,19 * * *'  # Twice daily: 7 AM + 7 PM UTC (8 AM + 8 PM CET)
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        run: python scrape_availability.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          STORAGE_MODE: db_only

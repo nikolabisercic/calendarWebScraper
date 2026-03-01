@@ -1,0 +1,4 @@
+.env
+__pycache__/
+*.pyc
+raw_html_property_*.html

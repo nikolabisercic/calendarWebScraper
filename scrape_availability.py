@@ -2,8 +2,13 @@
 """
 Rental Property Occupancy Tracker
 
-Scrapes availability data from weekendica.com properties and stores it in Excel.
-Run daily to build historical occupancy data.
+Scrapes availability data from weekendica.com properties and stores it in Excel
+and/or Supabase PostgreSQL. Run daily to build historical occupancy data.
+
+Environment variables:
+    STORAGE_MODE: "both" (Excel + DB, default), "db_only" (DB only, for CI)
+    SUPABASE_URL: Supabase project URL
+    SUPABASE_KEY: Supabase secret key (for write access)
 """
 
 import requests
@@ -13,6 +18,7 @@ from openpyxl import load_workbook
 from datetime import datetime, timedelta
 import logging
 import time
+import os
 from pathlib import Path
 
 # Configuration
@@ -20,6 +26,7 @@ EXCEL_FILE = Path(__file__).parent / "KuceZaIzdavanje.xlsx"
 PROPERTIES_SHEET = "Properties"
 AVAILABILITY_SHEET = "Availability"
 REQUEST_DELAY = 1  # seconds between requests to be polite to the server
+STORAGE_MODE = os.environ.get("STORAGE_MODE", "both")  # "both" or "db_only"
 
 # Setup logging
 logging.basicConfig(
@@ -197,6 +204,36 @@ def batch_update_availability(updates: list[tuple[int, str, bool]]):
     logger.info(f"Availability batch update: {updated} updated, {inserted} inserted")
 
 
+def init_supabase():
+    """Initialize Supabase client from environment variables."""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        logger.warning("SUPABASE_URL or SUPABASE_KEY not set, database storage disabled")
+        return None
+    from supabase import create_client
+    return create_client(url, key)
+
+
+def get_properties_from_db(db) -> list[dict]:
+    """Read properties from Supabase and return list with ID and URL."""
+    result = db.table("properties").select("id, url").order("id").execute()
+    return [{"id": r["id"], "url": r["url"]} for r in result.data]
+
+
+def batch_upsert_supabase(db, updates: list[tuple[int, str, bool]]):
+    """Upsert availability records to Supabase."""
+    checked_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    records = [
+        {"property_id": prop_id, "date": date, "booked": booked, "checked_at": checked_at}
+        for prop_id, date, booked in updates
+    ]
+    result = db.table("availability").upsert(
+        records, on_conflict="property_id,date"
+    ).execute()
+    logger.info(f"Supabase upsert: {len(result.data)} rows")
+
+
 def calculate_occupancy_summaries():
     """Calculate monthly occupancy percentages and update Properties sheet."""
     logger.info("Calculating occupancy summaries")
@@ -281,14 +318,27 @@ def calculate_occupancy_summaries():
 def main():
     """Main entry point for the scraper."""
     logger.info("=" * 50)
-    logger.info("Starting occupancy scraper")
+    logger.info(f"Starting occupancy scraper (storage: {STORAGE_MODE})")
     logger.info("=" * 50)
 
-    # Ensure Excel structure is correct
-    setup_excel_structure()
+    use_excel = STORAGE_MODE in ("both", "excel_only")
+    use_db = STORAGE_MODE in ("both", "db_only")
+
+    # Initialize Supabase client if needed
+    db = init_supabase() if use_db else None
+    if use_db and not db:
+        logger.error("Database storage requested but Supabase credentials not set")
+        return
+
+    # Ensure Excel structure is correct (skip in db_only mode)
+    if use_excel:
+        setup_excel_structure()
 
     # Get list of properties
-    properties = get_properties()
+    if use_excel:
+        properties = get_properties()
+    else:
+        properties = get_properties_from_db(db)
     logger.info(f"Found {len(properties)} properties")
 
     # Get target dates (today and tomorrow)
@@ -326,12 +376,18 @@ def main():
 
     logger.info(f"Successfully scraped {success_count}/{len(properties)} properties")
 
-    # Batch write all availability data to Excel (single open/save)
     if availability_updates:
-        batch_update_availability(availability_updates)
+        # Write to Excel
+        if use_excel:
+            batch_update_availability(availability_updates)
 
-    # Calculate and update occupancy summaries
-    calculate_occupancy_summaries()
+        # Write to Supabase
+        if use_db and db:
+            batch_upsert_supabase(db, availability_updates)
+
+    # Calculate and update occupancy summaries (Excel only)
+    if use_excel:
+        calculate_occupancy_summaries()
 
     logger.info("Scraper finished")
 
