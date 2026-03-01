@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
-  getProperties,
+  getPropertyById,
   getPropertyAvailability,
   computePropertyMonthlyOccupancy,
   extractPropertyName,
@@ -22,12 +22,11 @@ export default async function PropertyDetailPage({
   const propertyId = parseInt(id, 10);
   if (isNaN(propertyId)) notFound();
 
-  const [properties, availability] = await Promise.all([
-    getProperties(),
+  const [property, availability] = await Promise.all([
+    getPropertyById(propertyId),
     getPropertyAvailability(propertyId),
   ]);
 
-  const property = properties.find((p) => p.id === propertyId);
   if (!property) notFound();
 
   const monthlyOcc = computePropertyMonthlyOccupancy(availability);

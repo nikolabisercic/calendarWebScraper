@@ -40,12 +40,18 @@ export async function getProperties(): Promise<Property[]> {
 
 export async function getAvailability(): Promise<AvailabilityRow[]> {
   const PAGE_SIZE = 1000;
+  // Limit to last 12 months to bound query growth
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 12);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
   let allData: AvailabilityRow[] = [];
   let from = 0;
   while (true) {
     const { data, error } = await supabase
       .from("availability")
       .select("property_id, date, booked, checked_at")
+      .gte("date", cutoffStr)
       .order("date")
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw error;
@@ -54,6 +60,18 @@ export async function getAvailability(): Promise<AvailabilityRow[]> {
     from += PAGE_SIZE;
   }
   return allData;
+}
+
+export async function getPropertyById(
+  propertyId: number
+): Promise<Property | null> {
+  const { data, error } = await supabase
+    .from("properties")
+    .select("id, url, lokacija, kapacitet_kuce")
+    .eq("id", propertyId)
+    .single();
+  if (error) return null;
+  return data;
 }
 
 export async function getPropertyAvailability(

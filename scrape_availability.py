@@ -389,6 +389,8 @@ def main():
                 batch_upsert_supabase(db, availability_updates)
             except Exception as e:
                 logger.error(f"Supabase write failed: {e}")
+                if not use_excel:
+                    raise
 
     # Calculate and update occupancy summaries (Excel only)
     if use_excel:

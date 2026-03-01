@@ -58,7 +58,7 @@ export function CalendarHeatmap({ data }: { data: AvailabilityRow[] }) {
                       key={row.date}
                       className={`flex h-8 w-8 items-center justify-center rounded text-xs font-medium ${
                         row.booked
-                          ? "bg-chart-1 text-primary-foreground"
+                          ? "bg-chart-1 text-white"
                           : "bg-muted text-muted-foreground"
                       }`}
                       aria-label={`${row.date} (${dayName}) - ${row.booked ? "Booked" : "Available"}`}
